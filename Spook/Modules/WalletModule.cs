@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Linq;
 using System.Collections.Generic;
+using System.Text.Json;
 
 using Phantasma.VM.Utils;
 using Phantasma.Cryptography;
@@ -20,8 +21,8 @@ using Phantasma.Blockchain;
 using Phantasma.Domain;
 using Phantasma.VM;
 using Phantasma.Blockchain.Contracts;
-using Newtonsoft.Json;
 using System.Globalization;
+using Newtonsoft.Json;
 
 namespace Phantasma.Spook.Modules
 {
@@ -290,16 +291,8 @@ namespace Phantasma.Spook.Modules
             var tempAmount = decimal.Parse(args[2]);
             var tokenSymbol = args[3];
 
-            TokenResult tokenInfo;
-            try
-            {
-                var result = api.GetToken(tokenSymbol);
-                tokenInfo = (TokenResult)result;
-            }
-            catch (Exception e)
-            {
-                throw new CommandException(e.Message);
-            }
+
+            var tokenInfo = FetchTokenInfo(api, tokenSymbol);
 
             if (!tokenInfo.flags.Contains("Fungible"))
             {
@@ -537,6 +530,9 @@ namespace Phantasma.Spook.Modules
 
             sb.AllowGas(Keys.Address, Address.Null, minFee, expectedLimit);
 
+
+            Dictionary<string, TokenResult> tokens = new Dictionary<string, TokenResult>();
+
             int addressCount = 0;
             foreach (var line in lines)
             {
@@ -552,14 +548,16 @@ namespace Phantasma.Spook.Modules
                 var target = Address.FromText(temp[0]);
                 var symbol = temp[1];
                 decimal val;
-                
+
                 if (!Decimal.TryParse(temp[2], NumberStyles.Any, new CultureInfo("en-US"), out val) || val <= 0)
                 {
                     throw new CommandException($"Invalid amount {val} for {target}");
                 }
 
-                var token = nexus.GetTokenInfo(nexus.RootStorage, symbol);
-                var amount = UnitConversion.ToBigInteger(val, token.Decimals);
+                var token = tokens.ContainsKey(symbol) ? tokens[symbol] : FetchTokenInfo(api, symbol);
+                tokens[symbol] = token;
+
+                var amount = UnitConversion.ToBigInteger(val, token.decimals);
 
                 sb.TransferTokens(symbol, Keys.Address, target, amount);
             }
@@ -606,7 +604,7 @@ namespace Phantasma.Spook.Modules
 
             if (method == null)
             {
-                throw new Exception("ABI is missing: " + method.name);
+                throw new Exception("ABI is missing: " + methodName);
             }
 
             var vm = new GasMachine(script, (uint)method.offset);
@@ -616,7 +614,7 @@ namespace Phantasma.Spook.Modules
                 return vm.Stack.Pop();
             }
 
-            throw new Exception("Script execution failed for: " + method.name);
+            throw new Exception("Script execution failed for: " + methodName);
         }
 
         private static void DeployOrUpgrade(string[] args, NexusAPI api, BigInteger minFee, bool isUpgrade)
@@ -657,6 +655,31 @@ namespace Phantasma.Spook.Modules
 
             var sb = new ScriptBuilder();
 
+            int nexusVersion = 0;
+
+            try
+            {
+                var nexusDetails = api.Execute("getNexus", new object[] { false });
+                var root = LunarLabs.Parser.JSON.JSONReader.ReadFromString(nexusDetails);
+
+                var governance = root["governance"];
+
+                var entry = governance.Children.Where(x => x.GetNode("name").Value == "nexus.protocol.version").FirstOrDefault();
+                entry = entry.GetNodeByIndex(1);
+
+                nexusVersion = Int32.Parse(entry.Value);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                nexusVersion = -1;
+            }
+
+            if (nexusVersion <= 1)
+            {
+                throw new CommandException("Failed to obtain nexus version via API");
+            }
+
             bool isToken = ValidationUtils.IsValidTicker(contractName);
             var availableFlags = Enum.GetValues(typeof(TokenFlags)).Cast<TokenFlags>().ToArray();
 
@@ -669,7 +692,7 @@ namespace Phantasma.Spook.Modules
                 {
                     var symbol = contractName;
                     var resultStr = api.Execute("getToken", new[] { symbol, "false" });
-                    dynamic apiResult = JsonConvert.DeserializeObject<TokenResult>(resultStr);
+                    dynamic apiResult = System.Text.Json.JsonSerializer.Deserialize<TokenResult>(resultStr);
 
                     if (apiResult is TokenResult)
                     {
@@ -717,12 +740,31 @@ namespace Phantasma.Spook.Modules
                     throw new CommandException("token contract is missing required 'name' property");
                 }
 
-                var symbol = contractName;
+                string symbol = null; 
+                
+                
+                if (nexusVersion < 6)
+                {
+                    symbol = contractName;
+                }
+                else
+                {
+                    if (abi.HasMethod("getSymbol"))
+                    {
+                        symbol = ExecuteScript(contractScript, abi, "getSymbol").AsString();
+                    }
+
+                    if (string.IsNullOrEmpty(symbol))
+                    {
+                        throw new CommandException("token contract 'symbol' property is either missing or returning an empty value");
+                    }
+                }
+
                 var name = ExecuteScript(contractScript, abi, "getName").AsString();
 
                 if (string.IsNullOrEmpty(name))
                 {
-                    throw new CommandException("token contract 'name' property is returning an empty value");
+                    throw new CommandException("token contract 'name' property is either missing or returning an empty value");
                 }
 
                 BigInteger maxSupply = abi.HasMethod("getMaxSupply") ? ExecuteScript(contractScript, abi, "getMaxSupply").AsNumber() : 0;
@@ -739,7 +781,14 @@ namespace Phantasma.Spook.Modules
                     }
                 }
 
-                sb.CallInterop("Nexus.CreateToken", Keys.Address, symbol, name, maxSupply, decimals, flags, contractScript, abiBytes);
+                if (nexusVersion < 6)
+                {
+                    sb.CallInterop("Nexus.CreateToken", Keys.Address, symbol, name, maxSupply, decimals, flags, contractScript, abiBytes);
+                }
+                else
+                {
+                    sb.CallInterop("Nexus.CreateToken", Keys.Address, contractScript, abiBytes);
+                }
 
                 contractName = symbol;
             }
@@ -828,6 +877,20 @@ namespace Phantasma.Spook.Modules
             var script = sb.EndScript();
 
             var hash = ExecuteTransaction(api, script, ProofOfWork.Minimal, Keys);
+        }
+
+        private static TokenResult FetchTokenInfo(NexusAPI api, string symbol)
+        {
+            try
+            {
+                var resultStr = api.Execute("getToken", new object[] { symbol, false});
+                var tokenInfo = JsonConvert.DeserializeObject<TokenResult>(resultStr);
+                return tokenInfo;
+            }
+            catch (Exception e)
+            {
+                throw new CommandException(e.Message);
+            }
         }
     }
 }

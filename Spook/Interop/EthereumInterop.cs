@@ -106,9 +106,16 @@ namespace Phantasma.Spook.Interop
                                     continue;
                                 }
 
-                                this.Logger.Debug($"EthInterop:Update() resync block {blockId} now.");
-                                var block = GetInteropBlock(blockId);
-                                ProcessBlock(block, ref result);
+                                try
+                                {
+                                    this.Logger.Debug($"EthInterop:Update() resync block {blockId} now.");
+                                    var block = GetInteropBlock(blockId);
+                                    ProcessBlock(block, ref result);
+                                }
+                                catch (Exception e)
+                                {
+                                    this.Logger.Error($"EthInterop:Update() resync block {blockId} failed: " + e);
+                                }
                                 _resyncBlockIds.RemoveAt(i);
                             }
                         }
@@ -314,7 +321,7 @@ namespace Phantasma.Spook.Interop
 
 
         public static Tuple<InteropBlock, InteropTransaction[]> MakeInteropBlock(Logger logger, BlockWithTransactions block, EthAPI api
-                , string swapAddress)
+                , string[] swapAddress)
         {
             //TODO
             return null;
@@ -350,14 +357,14 @@ namespace Phantasma.Spook.Interop
         }
 
         public static Tuple<InteropBlock, InteropTransaction[]> MakeInteropBlock(Nexus nexus, Logger logger, EthAPI api
-                , BigInteger height, string[] contracts, uint confirmations, string swapAddress)
+                , BigInteger height, string[] contracts, uint confirmations, string[] swapAddress)
         {
             Hash blockHash = Hash.Null;
             var interopTransactions = new List<InteropTransaction>();
 
             //TODO HACK
             var combinedAddresses = contracts.ToList();
-            combinedAddresses.Add(swapAddress);
+            combinedAddresses.AddRange(swapAddress);
 
             Dictionary<string, Dictionary<string, List<InteropTransfer>>> transfers = new Dictionary<string, Dictionary<string, List<InteropTransfer>>>();
             try
@@ -402,8 +409,21 @@ namespace Phantasma.Spook.Interop
             return Tuple.Create(interopBlock, interopTransactions.ToArray());
         }
 
+        private static string FetchTokenURI(string contractAddress, BigInteger tokenID)
+        {
+            throw new NotImplementedException();
+            /*
+            Nethereum.Web3.Web3 web3 = null; ????
+            abi = ??
+            var contract = web3.Eth.GetContract(abi, contractAddress);
+            var function = contract.GetFunction("tokenURI");
+            object[] args = new object[] { tokenID };
+            var result = function.CallAsync<string>(args);
+            return result;*/
+        }
+
         private static Dictionary<string, List<InteropTransfer>> GetInteropTransfers(Nexus nexus, Logger logger,
-                TransactionReceipt txr, EthAPI api, string swapAddress)
+                TransactionReceipt txr, EthAPI api, string[] swapAddresses)
         {
             logger.Debug($"get interop transfers for tx {txr.TransactionHash}");
             var interopTransfers = new Dictionary<string, List<InteropTransfer>>();
@@ -427,12 +447,54 @@ namespace Phantasma.Spook.Interop
                 return interopTransfers;
             }
 
-            var nodeSwapAddress = EthereumWallet.EncodeAddress(swapAddress);
-            var events = txr.DecodeAllEvents<TransferEventDTO>();
+            var nodeSwapAddresses = swapAddresses.Select(x => EthereumWallet.EncodeAddress(x));
             var interopAddress = ExtractInteropAddress(tx);
 
+            // ERC721 (NFT)
+            // TODO currently this code block is mostly copypaste from ERC20 block, later make a single method for both...
+            var erc721_events = txr.DecodeAllEvents<Nethereum.StandardNonFungibleTokenERC721.ContractDefinition.TransferEventDTOBase>();
+            foreach (var evt in erc721_events)
+            {
+                var asset = EthUtils.FindSymbolFromAsset(nexus, evt.Log.Address);
+                if (asset == null)
+                {
+                    logger.Warning($"Asset [{evt.Log.Address}] not supported");
+                    continue;
+                }
+
+                var targetAddress = EthereumWallet.EncodeAddress(evt.Event.To);
+                var sourceAddress = EthereumWallet.EncodeAddress(evt.Event.From);
+                var tokenID = PBigInteger.Parse(evt.Event.TokenId.ToString());
+
+                if (nodeSwapAddresses.Contains(targetAddress))
+                {
+                    if (!interopTransfers.ContainsKey(evt.Log.TransactionHash))
+                    {
+                        interopTransfers.Add(evt.Log.TransactionHash, new List<InteropTransfer>());
+                    }
+
+                    string tokenURI = FetchTokenURI(evt.Log.Address, evt.Event.TokenId);
+
+                    interopTransfers[evt.Log.TransactionHash].Add
+                    (
+                        new InteropTransfer
+                        (
+                            EthereumWallet.EthereumPlatform,
+                            sourceAddress,
+                            DomainSettings.PlatformName,
+                            targetAddress,
+                            interopAddress,
+                            asset,
+                            tokenID,
+                            System.Text.Encoding.UTF8.GetBytes(tokenURI)
+                        )
+                    );
+                }
+            }
+
             // ERC20
-            foreach(var evt in events)
+            var erc20_events = txr.DecodeAllEvents<TransferEventDTO>();
+            foreach (var evt in erc20_events)
             {
                 var asset = EthUtils.FindSymbolFromAsset(nexus, evt.Log.Address);
                 if (asset == null)
@@ -445,7 +507,7 @@ namespace Phantasma.Spook.Interop
                 var sourceAddress = EthereumWallet.EncodeAddress(evt.Event.From);
                 var amount = PBigInteger.Parse(evt.Event.Value.ToString());
 
-                if (targetAddress.Equals(nodeSwapAddress))
+                if (nodeSwapAddresses.Contains(targetAddress))
                 {
                     if (!interopTransfers.ContainsKey(evt.Log.TransactionHash))
                     {
@@ -473,7 +535,7 @@ namespace Phantasma.Spook.Interop
                 var targetAddress = EthereumWallet.EncodeAddress(tx.To);
                 var sourceAddress = EthereumWallet.EncodeAddress(tx.From);
 
-                if (targetAddress.Equals(nodeSwapAddress))
+                if (nodeSwapAddresses.Contains(targetAddress))
                 {
                     var amount = PBigInteger.Parse(tx.Value.ToString());
 
@@ -509,13 +571,13 @@ namespace Phantasma.Spook.Interop
                 : new InteropTransaction(Hash.Null, transfers.ToArray()));
         }
 
-        public static InteropTransaction MakeInteropTx(Nexus nexus, Logger logger, TransactionReceipt txr, EthAPI api, string swapAddress)
+        public static InteropTransaction MakeInteropTx(Nexus nexus, Logger logger, TransactionReceipt txr, EthAPI api, string[] swapAddresses)
         {
             logger.Debug("checking tx: " + txr.TransactionHash);
 
             IList<InteropTransfer> interopTransfers = new List<InteropTransfer>();
 
-            interopTransfers = GetInteropTransfers(nexus, logger, txr, api, swapAddress).SelectMany(x => x.Value).ToList();
+            interopTransfers = GetInteropTransfers(nexus, logger, txr, api, swapAddresses).SelectMany(x => x.Value).ToList();
             logger.Debug($"Found {interopTransfers.Count} interop transfers!");
 
             return ((interopTransfers.Count() > 0)

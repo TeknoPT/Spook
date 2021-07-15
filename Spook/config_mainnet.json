@@ -45,8 +45,7 @@
         "http://seed2.ngd.network:10332",
         "http://seed3.ngd.network:10332",
         "http://seed4.ngd.network:10332",
-        "http://seed5.ngd.network:10332",
-        "https://explorer.o3node.org:443"
+        "http://seed5.ngd.network:10332"
       ],
 
       "neo.rpc.specific.nodes": [ "http://135.181.45.206:10332" ],
@@ -73,11 +72,78 @@
           "feeIncrease": 40
         }
       ],
-
+      "pricer.coingecko.enabled": true,
+      "pricer.supportedtokens": [
+        {
+          "ticker": "SOUL",
+          "coingeckoid": "phantasma",
+          "cryptocompareid": "SOUL"
+        },
+        {
+          "ticker": "KCAL",
+          "coingeckoid": "phantasma-energy",
+          "cryptocompareid": "KCAL"
+        },
+        {
+          "ticker": "NEO",
+          "coingeckoid": "neo",
+          "cryptocompareid": "NEO"
+        },
+        {
+          "ticker": "GAS",
+          "coingeckoid": "gas",
+          "cryptocompareid": "GAS"
+        },
+        {
+          "ticker": "USDT",
+          "coingeckoid": "tether",
+          "cryptocompareid": "USDT"
+        },
+        {
+          "ticker": "ETH",
+          "coingeckoid": "ethereum",
+          "cryptocompareid": "ETH"
+        },
+        {
+          "ticker": "DAI",
+          "coingeckoid": "dai",
+          "cryptocompareid": "DAI"
+        },
+        {
+          "ticker": "DYT",
+          "coingeckoid": "dynamite",
+          "cryptocompareid": "DYT"
+        },
+        {
+          "ticker": "DANK",
+          "coingeckoid": "mu-dank",
+          "cryptocompareid": "DANK"
+        },
+        {
+          "ticker": "GOATI",
+          "coingeckoid": "GOATI",
+          "cryptocompareid": "GOATI"
+        },
+        {
+          "ticker": "USDC",
+          "coingeckoid": "usd-coin",
+          "cryptocompareid": "USDC"
+        },
+        {
+          "ticker": "BNB",
+          "coingeckoid": "binancecoin",
+          "cryptocompareid": "BNB"
+        },
+        {
+          "ticker": "BUSD",
+          "coingeckoid": "binance-usd",
+          "cryptocompareid": "BNB"
+        }
+      ],
       "eth.block.confirmations": 12,
       "eth.gas.limit": 50000,
       "crypto.compare.key": "########################################################",
-      "swaps.platforms": "neo,ethereum",
+      "swap.platforms": "neo,ethereum",
       "phantasma.interop.height": "0",
       "neo.interop.height": "4394715",
       "eth.interop.height": "########################################################",

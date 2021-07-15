@@ -137,7 +137,7 @@ namespace Phantasma.Spook.Interop
     public class TokenSwapper : ITokenSwapper
     {
         public Logger Logger => Spook.Logger;
-        public Dictionary<string, string> SwapAddresses = new Dictionary<string,string>();
+        public Dictionary<string, string[]> SwapAddresses = new Dictionary<string,string[]>();
 
         internal readonly PhantasmaKeys SwapKeys;
         internal readonly OracleReader OracleReader;
@@ -174,6 +174,17 @@ namespace Phantasma.Spook.Interop
             interopBlocks[DomainSettings.PlatformName] = BigInteger.Parse(Settings.Oracle.PhantasmaInteropHeight);
             interopBlocks["neo"] = BigInteger.Parse(Settings.Oracle.NeoInteropHeight);
             interopBlocks["ethereum"] = BigInteger.Parse(Settings.Oracle.EthInteropHeight);
+
+            var inProgressMap = new StorageMap(InProgressTag, this.Storage);
+
+            Console.WriteLine($"inProgress count: {inProgressMap.Count()}");
+            inProgressMap.Visit<Hash, string>((key, value) =>
+            {
+                if (!string.IsNullOrEmpty(value))
+                    Console.WriteLine($"inProgress: {key} - {value}");
+            });
+
+
 
             _supportedPlatforms.Add(DomainSettings.PlatformName);
             foreach (var entry in supportedPlatforms)
@@ -280,15 +291,17 @@ namespace Phantasma.Spook.Interop
                     }
 
                     _swappers["neo"] = new NeoInterop(this, neoAPI, interopBlocks["neo"], Settings.Oracle.NeoQuickSync);
-                    SwapAddresses["neo"] = _swappers["neo"].LocalAddress;
+                    var platformInfo = Nexus.GetPlatformInfo(Nexus.RootStorage, "neo");
+                    SwapAddresses["neo"] = platformInfo.InteropAddresses.Select(x => x.ExternalAddress).ToArray();
 
                     _swappers["ethereum"] = new EthereumInterop(this, ethAPI, interopBlocks["ethereum"], Nexus.GetPlatformTokenHashes("ethereum", Nexus.RootStorage).Select(x => x.ToString().Substring(0, 40)).ToArray(), Settings.Oracle.EthConfirmations);
-                    SwapAddresses["ethereum"] = _swappers["ethereum"].LocalAddress;
+                    platformInfo = Nexus.GetPlatformInfo(Nexus.RootStorage, "ethereum");
+                    SwapAddresses["ethereum"] = platformInfo.InteropAddresses.Select(x => x.ExternalAddress).ToArray();
 
                     Logger.Message("Available swap addresses:");
                     foreach (var x in SwapAddresses)
                     {
-                        Logger.Message("platform: " + x.Key + " address: " + x.Value);
+                        Logger.Message("platform: " + x.Key + " address: " + string.Join(", ", x.Value));
                     }
                 }
 

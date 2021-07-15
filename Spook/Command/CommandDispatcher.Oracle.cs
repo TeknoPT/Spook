@@ -7,11 +7,43 @@ using Phantasma.VM.Utils;
 using Phantasma.Core.Types;
 using Phantasma.Blockchain;
 using Phantasma.Storage.Context;
+using Phantasma.Spook.Oracles;
+using Phantasma.Domain;
+using System.Text;
+using System.IO;
 
 namespace Phantasma.Spook.Command
 {
     partial class CommandDispatcher
     {
+
+        [ConsoleCommand("oracle get price", Category = "Oracle", Description = "Get current token price from an oracle")]
+        protected void OnOracleGetPriceCommand(string[] args)
+        {
+            var apiKey = _cli.CryptoCompareAPIKey;
+            var pricerCGEnabled = _cli.Settings.Oracle.PricerCoinGeckoEnabled;
+            var pricerSupportedTokens = _cli.Settings.Oracle.PricerSupportedTokens.ToArray();
+
+
+            Console.WriteLine($"Supported tokens:");
+            Console.WriteLine($"---------------------------");
+
+            foreach (var token in pricerSupportedTokens) {
+                Console.WriteLine($"{token.ticker}: {token.cryptocompareId}: {token.coingeckoId}");
+            }
+            Console.WriteLine($"---------------------------");
+
+            if(pricerCGEnabled) { 
+                var cgprice = CoinGeckoUtils.GetCoinRate(args[0], DomainSettings.FiatTokenSymbol, pricerSupportedTokens, Spook.Logger);
+                Console.WriteLine($"Oracle Coingecko Price for token {args[0]} is: {cgprice}");
+            }
+            var price = CryptoCompareUtils.GetCoinRate(args[0], DomainSettings.FiatTokenSymbol, apiKey, pricerSupportedTokens, Spook.Logger);
+            Console.WriteLine($"Oracle CryptoCompare Price for token {args[0]} is: {price}");
+
+            var gprice = Pricer.GetCoinRate(args[0], DomainSettings.FiatTokenSymbol, apiKey, pricerCGEnabled, pricerSupportedTokens, Spook.Logger);
+            Console.WriteLine($"Oracle Global Price for token {args[0]} is: {gprice}");
+        }
+
         [ConsoleCommand("oracle read", Category = "Oracle", Description="Read a transaction from an oracle")]
         protected void OnOracleReadCommand(string[] args)
         {
@@ -79,6 +111,56 @@ namespace Phantasma.Spook.Command
                 }
 
                 _cli.TokenSwapper.ResyncBlockOnChain(platform, blockId);
+            }
+        }
+
+        [ConsoleCommand("export inprogress", Category = "Oracle", Description = "resync certain blocks on a psecific platform")]
+        protected void onExportInProgress(string[] args)
+        {
+            if (args.Length != 1)
+            {
+                Console.WriteLine("File path needs to be given!");
+            }
+
+            var filePath = args[0];
+
+            var InProgressTag = ".inprogress";
+            var storage = new KeyStoreStorage(_cli.Nexus.CreateKeyStoreAdapter("swaps"));
+            var inProgressMap = new StorageMap(InProgressTag, storage);
+            var csv = new StringBuilder();
+
+            inProgressMap.Visit<Hash, string>((key, value) => {
+                var line = $"{key.ToString()},{value}";
+                csv.AppendLine(line);
+            });
+
+            System.IO.File.WriteAllText(filePath, csv.ToString());
+        }
+
+        [ConsoleCommand("import inprogress", Category = "Oracle", Description = "resync certain blocks on a psecific platform")]
+        protected void onImportInProgress(string[] args)
+        {
+            if (args.Length != 1)
+            {
+                Console.WriteLine("File path needs to be given!");
+            }
+            var InProgressTag = ".inprogress";
+            var storage = new KeyStoreStorage(_cli.Nexus.CreateKeyStoreAdapter("swaps"));
+            var inProgressMap = new StorageMap(InProgressTag, storage);
+
+            var filePath = args[0];
+            using(var reader = new StreamReader(filePath))
+            {
+                while (!reader.EndOfStream)
+                {
+                    var line = reader.ReadLine();
+                    var values = line.Split(',');
+                    var hash = Hash.FromString(values[0]);
+                    if (!inProgressMap.ContainsKey<Hash>(hash))
+                    {
+                        inProgressMap.Set<Hash,string>(Hash.FromString(values[0]), values[1]);
+                    }
+                }
             }
         }
 

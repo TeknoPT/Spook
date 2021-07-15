@@ -157,7 +157,8 @@ namespace Phantasma.Spook.Oracles
                 return true;
             }
 
-            logger.Error("storageKey " + storageKey + " failed!");
+            keyStore.Set(storageKey, data);
+            logger.Error("storageKey " + storageKey + " updated!");
             return false;
         }
 
@@ -201,6 +202,9 @@ namespace Phantasma.Spook.Oracles
         protected override decimal PullPrice(Timestamp time, string symbol)
         {
             var apiKey = _cli.CryptoCompareAPIKey;
+            var pricerCGEnabled = _cli.Settings.Oracle.PricerCoinGeckoEnabled;
+            var pricerSupportedTokens = _cli.Settings.Oracle.PricerSupportedTokens.ToArray();
+
             if (!string.IsNullOrEmpty(apiKey))
             {
                 if (symbol == DomainSettings.FuelTokenSymbol)
@@ -209,7 +213,8 @@ namespace Phantasma.Spook.Oracles
                     return result / 5;
                 }
 
-                var price = CryptoCompareUtils.GetCoinRate(symbol, DomainSettings.FiatTokenSymbol, apiKey);
+                //var price = CryptoCompareUtils.GetCoinRate(symbol, DomainSettings.FiatTokenSymbol, apiKey);
+                var price = Pricer.GetCoinRate(symbol, DomainSettings.FiatTokenSymbol, apiKey, pricerCGEnabled, pricerSupportedTokens, logger);
                 return price;
             }
 
@@ -251,7 +256,9 @@ namespace Phantasma.Spook.Oracles
                         throw new OracleException($"Neo block is null");
                     }
 
-                    interopTuple = NeoInterop.MakeInteropBlock(logger, neoBlock, _cli.NeoAPI, _cli.TokenSwapper.SwapAddresses[platformName]);
+                    var coldStorage = _cli.Settings.Oracle.SwapColdStorageNeo;
+                    interopTuple = NeoInterop.MakeInteropBlock(logger, neoBlock, _cli.NeoAPI,
+                            _cli.TokenSwapper.SwapAddresses[platformName], coldStorage);
                     break;
                 case EthereumWallet.EthereumPlatform:
 
@@ -280,22 +287,24 @@ namespace Phantasma.Spook.Oracles
             if (interopTuple.Item1.Hash != Hash.Null)
             {
 
-                var persisted = Persist<InteropBlock>(platformName, chainName, interopTuple.Item1.Hash, StorageConst.Block,
+                var initialStore = Persist<InteropBlock>(platformName, chainName, interopTuple.Item1.Hash, StorageConst.Block,
                         interopTuple.Item1);
+                var transactions = interopTuple.Item2;
 
-                if (persisted)
+                if (!initialStore)
                 {
-                    var transactions = interopTuple.Item2;
+                    logger.Debug($"Oracle block { interopTuple.Item1.Hash } on platform { platformName } updated!");
+                }
 
-                    foreach (var tx in transactions)
+                foreach (var tx in transactions)
+                {
+                    var txInitialStore = Persist<InteropTransaction>(platformName, chainName, tx.Hash, StorageConst.Transaction, tx);
+                    if (!txInitialStore)
                     {
-                        var txPersisted = Persist<InteropTransaction>(platformName, chainName, tx.Hash, StorageConst.Transaction, tx);
+                        logger.Debug($"Oracle block { interopTuple.Item1.Hash } on platform { platformName } updated!");
                     }
                 }
-                else 
-                {
-                    logger.Error($"Persisting oracle block { interopTuple.Item1.Hash } on platform { platformName } failed!");
-                }
+
             }
 
             return interopTuple.Item1;
@@ -317,7 +326,8 @@ namespace Phantasma.Spook.Oracles
                     NeoTx neoTx;
                     UInt256 uHash = new UInt256(LuxUtils.ReverseHex(hash.ToString()).HexToBytes());
                     neoTx = _cli.NeoAPI.GetTransaction(uHash);
-                    tx = NeoInterop.MakeInteropTx(logger, neoTx, _cli.NeoAPI, _cli.TokenSwapper.SwapAddresses[platformName]);
+                    var coldStorage = _cli.Settings.Oracle.SwapColdStorageNeo;
+                    tx = NeoInterop.MakeInteropTx(logger, neoTx, _cli.NeoAPI, _cli.TokenSwapper.SwapAddresses[platformName], coldStorage);
                     break;
                 case EthereumWallet.EthereumPlatform:
                     var txRcpt = _cli.EthAPI.GetTransactionReceipt(hash.ToString());
@@ -330,7 +340,7 @@ namespace Phantasma.Spook.Oracles
 
             if (!Persist<InteropTransaction>(platformName, chainName, tx.Hash, StorageConst.Transaction, tx))
             {
-                logger.Error($"Persisting oracle transaction { hash } on platform { platformName } failed!");
+                logger.Error($"Oracle transaction { hash } on platform { platformName } updated!");
             }
 
             return tx;

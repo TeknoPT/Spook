@@ -46,8 +46,6 @@ namespace Phantasma.Spook
 
     public class Spook : Runnable
     {
-        public static readonly int Protocol = 5;
-
         public readonly string LogPath;
         public readonly SpookSettings Settings;
 
@@ -137,6 +135,11 @@ namespace Phantasma.Spook
 
             if (_node != null && Settings.App.NodeStart)
             {
+                if (_peerCaps.HasFlag(PeerCaps.Sync) && Settings.Node.NodeHost.Contains("localhost"))
+                {
+                    Logger.Warning($"This node host external endpoint is not properly configured and it won't appear on other nodes GetPeers API call.");
+                }
+
                 _node.StartInThread();
             }
 
@@ -319,7 +322,7 @@ namespace Phantasma.Spook
 
                         var genesisTimestamp = Settings.Node.GenesisTimestamp;
 
-                        if (!_nexus.CreateGenesisBlock(_nodeKeys, genesisTimestamp, Phantasma.Spook.Spook.Protocol))
+                        if (!_nexus.CreateGenesisBlock(_nodeKeys, genesisTimestamp, DomainSettings.LatestKnownProtocol))
                         {
                             throw new ChainException("Genesis block failure");
                         }
@@ -349,16 +352,22 @@ namespace Phantasma.Spook
             else
             {
                 var genesisAddress = _nexus.GetGenesisAddress(_nexus.RootStorage);
-                if (Settings.Node.IsValidator && _nodeKeys.Address != genesisAddress && !Settings.Node.Readonly)
+                if (Settings.Node.IsValidator && !Settings.Node.Readonly)
                 {
-                    throw new Exception("Specified node key does not match genesis address " + genesisAddress.Text);
+                    if (!_nexus.IsKnownValidator(_nodeKeys.Address))
+                    {
+                        throw new Exception("Specified node key does not match a known validator address");
+                    }
+                    else
+                    if (_nodeKeys.Address != genesisAddress)
+                    {
+                        Logger.Warning("Specified node key does not match genesis address " + genesisAddress.Text);
+                    }
                 }
-                else
-                {
-                    var chainHeight = _nexus.RootChain.Height;
-                    var genesisHash = _nexus.GetGenesisHash(_nexus.RootStorage);
-                    Logger.Success($"Loaded {Nexus.Name} Nexus with genesis {genesisHash } with {chainHeight} blocks");
-                }
+
+                var chainHeight = _nexus.RootChain.Height;
+                var genesisHash = _nexus.GetGenesisHash(_nexus.RootStorage);
+                Logger.Success($"Loaded {Nexus.Name} Nexus with genesis {genesisHash } with {chainHeight} blocks");
             }
 
             return node;
@@ -480,6 +489,8 @@ namespace Phantasma.Spook
             if (apiProxyURL != null)
             {
                 nexusApi.ProxyURL = apiProxyURL;
+                // TEMP Normal node needs a proxy url set to relay transactions to the BPs
+                nexusApi.Node = _node;
                 Logger.Message($"API will be acting as proxy for {apiProxyURL}");
             }
             else
@@ -526,10 +537,11 @@ namespace Phantasma.Spook
                     throw new Exception("A proxy node must have api cache enabled.");
                 }
 
-                if (Settings.Node.Mode != NodeMode.Proxy)
-                {
-                    throw new Exception($"A {Settings.Node.Mode.ToString().ToLower()} node cannot have a proxy url specified.");
-                }
+                // TEMP commented for now, "Normal" node needs a proxy url to relay transactions to the BPs
+                //if (Settings.Node.Mode != NodeMode.Proxy)
+                //{
+                //    throw new Exception($"A {Settings.Node.Mode.ToString().ToLower()} node cannot have a proxy url specified.");
+                //}
 
                 if (!Settings.Node.HasRpc && !Settings.Node.HasRest)
                 {
