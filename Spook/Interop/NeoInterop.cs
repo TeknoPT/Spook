@@ -603,6 +603,11 @@ namespace Phantasma.Spook.Interop
                     {
                         if (pos ==2)
                         {
+                            if (entry.data == null || entry.data.Length == 0)
+                            {
+                                logger.Debug("Invalid op on pos 2, ignoring tx: " + tx);
+                                return emptyTx;
+                            }
                             var targetScriptHash = new UInt160(entry.data);
                             //logger.Debug("neo targetAddress: " + targetScriptHash.ToAddress());
                             var targetAddress = NeoWallet.EncodeByteArray(entry.data);
