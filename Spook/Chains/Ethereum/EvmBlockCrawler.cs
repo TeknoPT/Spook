@@ -103,7 +103,27 @@ namespace Phantasma.Spook.Chains
                     var txr = txVo.TransactionReceipt;
                     var tx = txVo.Transaction;
 
-                    var interopAddress = addressExtractor(tx);
+                    Address interopAddress;
+                    try
+                    {
+                        interopAddress = EthereumInterop.ExtractInteropAddress(tx, logger);
+                    }
+                    catch(Exception e)
+                    {
+                        if (e.ToString().Contains("Header byte out of range"))
+                        {
+                            // Ignoring this exception and skipping this tx.
+                            // RecoverFromSignature() crashed and we cannot avoid it atm.
+                            // Related to EIP-1559, example of probematic tx: https://etherscan.io/tx/0xb022c146d8d1e684de0c1faae43e7ce36afb6969719adfdcafcc5bb7d5913185
+                            // TODO Fix by updating to new Nethereum and dealing with EIP-1559 better.
+                            logger.Debug("Warning: Skipping 'Header byte out of range' tx: " + tx.TransactionHash);
+                            continue;
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
                     var transferEvents = txr.DecodeAllEvents<TransferEventDTO>();
                     //var swapEvents = txr.DecodeAllEvents<SwapEventDTO>();
                     var nodeSwapAddresses = swapAddresses.Select(x => encodeHandler(x)).ToList();
@@ -132,12 +152,12 @@ namespace Phantasma.Spook.Chains
                                 continue;
                             }
 
-                            logger.Message($"Found ERC20 swap: {blockId} hash: {hash} to: {evt.Event.To} from: {evt.Event.From} value: {evt.Event.Value}");
                             var asset = EthUtils.FindSymbolFromAsset(this.platform, nexus, evt.Log.Address);
-                            logger.Message("asset: " + asset);
+                            logger.Debug($@"Found {this.platform} swap: {blockId} hash: {hash} to: {evt.Event.To}
+                                from: {evt.Event.From} value: {evt.Event.Value} asset: {asset}");
                             if (asset == null)
                             {
-                                logger.Message($"Asset [{evt.Log.Address}] not supported");
+                                logger.Debug($"Asset [{evt.Log.Address}] not supported");
                                 continue;
                             }
 
@@ -146,9 +166,9 @@ namespace Phantasma.Spook.Chains
                             var amount = PBigInteger.Parse(evt.Event.Value.ToString());
 
                             //logger.Message("nodeSwapAddress: " + nodeSwapAddress);
-                            logger.Message("sourceAddress: " + sourceAddress);
-                            logger.Message("targetAddress: " + targetAddress);
-                            logger.Message("amount: " + amount);
+                            //logger.Message("sourceAddress: " + sourceAddress);
+                            //logger.Message("targetAddress: " + targetAddress);
+                            //logger.Message("amount: " + amount);
 
                             if (!interopTransfers[block.BlockHash].ContainsKey(evt.Log.TransactionHash))
                             {
@@ -173,12 +193,12 @@ namespace Phantasma.Spook.Chains
 
                     if (tx.Value != null && tx.Value.Value > 0)
                     {
-                        logger.Message("ETH:");
-                        logger.Message(block.Number.ToString());
-                        logger.Message(tx.TransactionHash);
-                        logger.Message(tx.To);
-                        logger.Message(tx.From);
-                        logger.Message(tx.Value.ToString());
+                        //logger.Message("ETH:");
+                        //logger.Message(block.Number.ToString());
+                        //logger.Message(tx.TransactionHash);
+                        //logger.Message(tx.To);
+                        //logger.Message(tx.From);
+                        //logger.Message(tx.Value.ToString());
 
                         var targetAddress = encodeHandler(tx.To);
                         Console.WriteLine("target eth: " + targetAddress);
@@ -196,6 +216,8 @@ namespace Phantasma.Spook.Chains
                         var sourceAddress = encodeHandler(tx.From);
                         var amount = PBigInteger.Parse(tx.Value.ToString());
 
+                        var nativeSymbol = (this.platform == "ethereum") ? "ETH" : "BNB";
+
                         interopTransfers[block.BlockHash][tx.TransactionHash].Add
                             (
                              new InteropTransfer
@@ -205,7 +227,7 @@ namespace Phantasma.Spook.Chains
                               DomainSettings.PlatformName,
                               targetAddress,
                               interopAddress, // interop address
-                              "BNB", // TODO use const
+                              nativeSymbol,
                               amount
                              )
                             );
